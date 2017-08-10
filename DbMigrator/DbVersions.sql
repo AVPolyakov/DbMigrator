@@ -6,3 +6,11 @@ CREATE TABLE DbVersions (
   CONSTRAINT PK_DbVersions_Id PRIMARY KEY CLUSTERED (Id)
 ) ON [PRIMARY]
 GO
+
+INSERT INTO [DbVersions]
+           ([DbVersion]
+           ,[ScriptName])
+     VALUES
+           (1,
+           'Init.sql')
+GO

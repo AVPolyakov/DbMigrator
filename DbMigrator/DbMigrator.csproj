@@ -57,14 +57,13 @@
   <ItemGroup>
     <None Include="App.config" />
     <None Include="packages.config" />
-    <EmbeddedResource Include="ScriptList.csv" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="DbVersions.sql" />
-    <EmbeddedResource Include="Scripts\170810_Create_T3.sql" />
-    <EmbeddedResource Include="Scripts\170810_Create_T4.sql" />
-    <EmbeddedResource Include="Scripts\170810_Create_T1.sql" />
-    <EmbeddedResource Include="Scripts\170810_Create_T2.sql" />
+    <EmbeddedResource Include="Scripts\Create_T3.sql" />
+    <EmbeddedResource Include="Scripts\Create_T2.sql" />
+    <EmbeddedResource Include="Scripts\Create_T1.sql" />
+    <EmbeddedResource Include="Scripts\Init.sql" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 

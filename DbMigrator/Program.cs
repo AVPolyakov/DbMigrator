@@ -3,32 +3,33 @@ using System.Collections.Generic;
 using System.Data.SqlClient;
 using System.IO;
 using System.Linq;
-using CsvHelper;
+using System.Runtime.CompilerServices;
 using Microsoft.SqlServer.TransactSql.ScriptDom;
+using static DbMigrator.Program;
 
 namespace DbMigrator
 {
-    class Program
+    static class Program
     {
         static void Main()
         {
             var scriptDataList = GetScriptData().ToList();
-            var dbVersions = GetDbVersions().ToDictionary(_ => _.ScriptName);
-            if (!IsDevDatabase)
+            var singleOrDefault = scriptDataList.SingleOrDefault(_ => !_.DbVersion.HasValue);
+            int nextVersion;
+            if (singleOrDefault != null)
             {
-                var nextAlreadyExecuted = false;
-                foreach (var scriptData in scriptDataList.OrderByDescending(_ => _.Info.DbVersion))
-                {
-                    if (nextAlreadyExecuted && !dbVersions.ContainsKey(scriptData.Info.ScriptName))
-                        throw new ApplicationException("База не является базой разработчика. Скрипты должны накатывать строго последовательно.");
-                    if (dbVersions.ContainsKey(scriptData.Info.ScriptName))
-                        nextAlreadyExecuted = true;
-                }
+                nextVersion = scriptDataList.Where(_ => _.DbVersion.HasValue).Max(_ => _.DbVersion.Value) + 1;
+                var path = Path.Combine(Path.Combine(GetPath(), Scripts), singleOrDefault.ScriptName);
+                File.WriteAllText(path, $@"--{nextVersion}
+{singleOrDefault.Content}");
             }
-            foreach (var scriptData in scriptDataList.OrderBy(_ => _.Info.DbVersion))
+            else
+                nextVersion = 1;
+            var dbVersions = GetDbVersions().ToDictionary(_ => _.ScriptName);
+            foreach (var scriptData in scriptDataList.OrderBy(_ => _.DbVersion.GetValueOrDefault(nextVersion)))
             {
                 DbVersion dbVersion;                
-                if (!dbVersions.TryGetValue(scriptData.Info.ScriptName, out dbVersion))
+                if (!dbVersions.TryGetValue(scriptData.ScriptName, out dbVersion))
                 {
                     using (var connection = new SqlConnection(ConnectionString))
                     {
@@ -50,18 +51,18 @@ namespace DbMigrator
                             command.Parameters.Add(new SqlParameter {
                                 ParameterName = "@ScriptName",
                                 Size = -1,
-                                Value = scriptData.Info.ScriptName
+                                Value = scriptData.ScriptName
                             });
-                            command.Parameters.AddWithValue("@DbVersion", scriptData.Info.DbVersion);
+                            command.Parameters.AddWithValue("@DbVersion", scriptData.DbVersion.GetValueOrDefault(nextVersion));
                             command.ExecuteNonQuery();
                         }
                         transaction.Commit();
                     }
-                    Console.WriteLine($"{scriptData.Info.ScriptName} executed.");
+                    Console.WriteLine($"{scriptData.ScriptName} executed.");
                 }
                 else
                 {
-                    if (scriptData.Info.DbVersion != dbVersion.DBVersion)
+                    if (scriptData.DbVersion.GetValueOrDefault(nextVersion) != dbVersion.DBVersion)
                     {
                         using (var connection = new SqlConnection(ConnectionString))
                         {
@@ -73,17 +74,19 @@ namespace DbMigrator
                                 command.Parameters.Add(new SqlParameter {
                                     ParameterName = "@ScriptName",
                                     Size = -1,
-                                    Value = scriptData.Info.ScriptName
+                                    Value = scriptData.ScriptName
                                 });
-                                command.Parameters.AddWithValue("@DbVersion", scriptData.Info.DbVersion);
+                                command.Parameters.AddWithValue("@DbVersion", scriptData.DbVersion.GetValueOrDefault(nextVersion));
                                 command.ExecuteNonQuery();
                             }
                         }
-                        Console.WriteLine($"{scriptData.Info.ScriptName} DB version updated.");
+                        Console.WriteLine($"{scriptData.ScriptName} DB version updated.");
                     }
                 }
             }
         }
+
+        public static string GetPath([CallerFilePath] string path = "") => Path.GetDirectoryName(path);
 
         private static IEnumerable<string> GetBatches(string text)
         {
@@ -124,27 +127,30 @@ Column={error.Column}");
 
         private static IEnumerable<ScriptData> GetScriptData()
         {
-            foreach (var tuple in GetScriptInfos())
-                using (var stream = ScriptsType.Assembly
-                    .GetManifestResourceStream($"{ScriptsType.Namespace}.Scripts.{tuple.ScriptName}"))
+            var resourceNames = ScriptsType.Assembly.GetManifestResourceNames()
+                .Where(_ => _.EndsWith(".sql", StringComparison.InvariantCultureIgnoreCase))
+                .ToList();
+            foreach (var resourceName in resourceNames)
+                using (var stream = ScriptsType.Assembly.GetManifestResourceStream(resourceName))
                 using (var reader = new StreamReader(stream))
-                    yield return new ScriptData(tuple, reader.ReadToEnd());
+                    yield return new ScriptData(resourceName, reader.ReadToEnd());
         }
 
-        private static IEnumerable<ScriptInfo> GetScriptInfos()
-        {
-            using (var stream = ScriptsType.Assembly.GetManifestResourceStream($"{ScriptsType.Namespace}.ScriptList.csv"))
-            using (var reader = new StreamReader(stream))
-            using (var csvReader = new CsvReader(reader))
-                while (csvReader.Read())
-                    yield return new ScriptInfo(
-                        csvReader.GetField<int>("DbVersion"),
-                        csvReader.GetField<string>("ScriptName"));
-        }
-
-        private static Type ScriptsType => typeof(Program);
+        public static Type ScriptsType => typeof(Program);
 
         private static string ConnectionString => "Data Source=(local)\\SQL2014;Initial Catalog=Temp20170810_local;Integrated Security=True";
+
+        public static IEnumerable<string> SplitToLines(this string text)
+        {
+            using (var reader = new StringReader(text))
+            {
+                string line;
+                while ((line = reader.ReadLine()) != null)
+                    yield return line;
+            }
+        }
+
+        public const string Scripts = "Scripts";
     }
 
     public class DbVersion
@@ -161,25 +167,29 @@ Column={error.Column}");
 
     public class ScriptData
     {
-        public ScriptInfo Info { get; }
+        public string ScriptName => ResourceName.Substring($"{ScriptsType.Namespace}.{Scripts}.".Length);
+
+        public int? DbVersion
+        {
+            get
+            {
+                var firstOrDefault = Content.SplitToLines().FirstOrDefault();
+                if (firstOrDefault == null) return null;
+                const string value = "--";
+                if (!firstOrDefault.StartsWith(value)) return null;
+                int result;
+                if (!int.TryParse(firstOrDefault.Substring(value.Length), out result)) return null;
+                return result;
+            }
+        }
+
+        public string ResourceName { get; }
         public string Content { get; }
 
-        public ScriptData(ScriptInfo info, string content)
+        public ScriptData(string resourceName, string content)
         {
-            Info = info;
+            ResourceName = resourceName;
             Content = content;
-        }
-    }
-
-    public class ScriptInfo
-    {
-        public int DbVersion { get; }
-        public string ScriptName { get; }
-
-        public ScriptInfo(int dbVersion, string scriptName)
-        {
-            DbVersion = dbVersion;
-            ScriptName = scriptName;
         }
     }
 }
