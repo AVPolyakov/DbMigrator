@@ -6,3 +6,7 @@ CREATE TABLE DbVersions (
   CONSTRAINT PK_DbVersions_Id PRIMARY KEY CLUSTERED (Id)
 ) ON [PRIMARY]
 GO
+
+CREATE UNIQUE INDEX UK_DbVersions_DbVersion
+ON DbVersions (DbVersion)
+GO
